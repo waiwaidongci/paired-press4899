@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter,Depends,HTTPException
 from fastapi.responses import Response
 from sqlalchemy import select
@@ -8,8 +9,9 @@ from src.schemas.study import StudyInput
 from src.schemas.observation import ObservationInput
 from src.schemas.run import RunInput
 from src.schemas.review import ReviewInput
+from src.schemas.erasure import ErasureInput
 from src.controllers import research
-from src.services import runs,studies
+from src.services import runs,studies,erasures
 from src.models.audit import Audit
 from src.models.observation import Observation
 from src.services.audits import log
@@ -45,5 +47,30 @@ def review(id:int,data:ReviewInput,db=Depends(get_db),user=Depends(admin)): retu
 @router.get('/runs/{id}/export')
 def export(id:int,db=Depends(get_db),user=Depends(current_user)):
     return Response(content=runs.export(db,id,user).encode('utf-8'),media_type='text/csv',headers={'Content-Disposition':f'attachment; filename="research-{id}.csv"'})
+# Withdrawal of measurement authorization.  Only the study lead may erase; the
+# tombstone is written synchronously and cleanup continues per-location.
+@router.post('/erasures')
+def request_erasure(data:ErasureInput,db=Depends(get_db),user=Depends(admin)):
+    try: obj,_=research.request_erasure(db,data,user)
+    except ValueError as exc: raise HTTPException(422,str(exc))
+    # Tombstone and scope are durable before any cleanup starts; reads and new
+    # analyses are already blocked.  Cleanup runs here, and a failure leaves a
+    # resumable record instead of a half-open withdrawal.
+    try: erasures.execute(db,obj.id)
+    except Exception: db.rollback()
+    return research.get_erasure(db,obj.id)
+@router.get('/erasures')
+def list_erasures(db=Depends(get_db),user=Depends(current_user)): return research.list_erasures(db)
+@router.get('/erasures/{id}')
+def get_erasure(id:int,db=Depends(get_db),user=Depends(current_user)): return research.get_erasure(db,id)
+@router.post('/erasures/{id}/execute')
+def execute_erasure(id:int,db=Depends(get_db),user=Depends(admin)):
+    try: erasures.execute(db,id)
+    except LookupError: raise HTTPException(404,'清除任务不存在')
+    except Exception:
+        # A resumable failure is reported as progress, not as a lost request:
+        # the receipt and per-location status stay visible to the operator.
+        logging.exception('erasure pass failed')
+    return research.get_erasure(db,id)
 @router.get('/audits')
 def audits(db=Depends(get_db),user=Depends(current_user)): return [record(x) for x in db.scalars(select(Audit).order_by(Audit.id.desc()).limit(100))]

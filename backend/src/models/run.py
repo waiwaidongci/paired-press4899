@@ -1,4 +1,4 @@
-from sqlalchemy import Column,Integer,String,JSON,Text,ForeignKey
+from sqlalchemy import Boolean,Column,Integer,String,JSON,Text,ForeignKey
 from src.config.database import Base
 class PairedRun(Base):
     __tablename__='runs'
@@ -12,4 +12,10 @@ class PairedRun(Base):
     result=Column(JSON,nullable=True)
     error=Column(Text,default='')
     created_at=Column(String(40),nullable=False)
+    # Normalized specimen numbers frozen into the snapshot. Used to find every
+    # analysis touched by a withdrawal without scanning historical payloads.
+    specimen_keys=Column(JSON,nullable=True)
+    # Irreversible-erasure tombstone marker. Reads and exports are refused when set.
+    erased=Column(Boolean,default=False,nullable=False)
+    erasure_id=Column(Integer,nullable=True)
 Run=PairedRun

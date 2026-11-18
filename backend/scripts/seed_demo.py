@@ -7,6 +7,7 @@ from src.models.user import User
 from src.models.study import Study
 from src.models.observation import Observation
 from src.models import run,review,audit
+from src.models.erasure import SpecimenErasure
 from src.utils.security import hash_password
 
 def seed():
@@ -36,6 +37,11 @@ def seed():
             for n,values in enumerate(rows):
                 key=f'DEMO-{k+1}-{n+1:04}'
                 if not db.scalar(select(Observation.id).where(Observation.study_id==study.id,Observation.source_key==key)):
+                    # Never resurrect a specimen number whose authorization was
+                    # withdrawn: the tombstone survives reseeding on purpose.
+                    from src.services.specimens import normalize
+                    if db.scalar(select(SpecimenErasure.id).where(SpecimenErasure.specimen_key==normalize(key))):
+                        continue
                     db.add(Observation(study_id=study.id,source_key=key,values=values))
         db.commit()
         counts={model.__tablename__:db.scalar(select(func.count()).select_from(model)) for model in (User,Study,Observation)}
